@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { splitPrayerLines } from './prayerLines'
 import type { CarePerson, CareVisit, PersonDraft, PrayerCheck, PrayerItem, PrayerStatus, Snapshot, VisitDraft } from './types'
 
 const url = import.meta.env.VITE_SUPABASE_URL?.trim()
@@ -16,10 +17,10 @@ const demoPerson: CarePerson = {
 let demo: Snapshot = {
   people: [demoPerson, { ...demoPerson, id: id(), name: '眾教會', category: '群體', is_profiled: false, residence: '', feeling: '' }],
   prayers: [
-    { id: id(), person_id: demoPerson.id, request: '為新的工作環境禱告，求主賜下平安與合宜的同行者。', status: 'active', is_pinned: true, answered_at: null, answered_note: '', source_visit_id: null, created_at: now() },
+    { id: id(), person_id: demoPerson.id, request: '為新的工作環境禱告，求主賜下平安與合宜的同行者。', status: 'active', is_pinned: true, answered_at: null, answered_note: '', source_visit_id: null, source_visit_line: null, created_at: now() },
   ],
   visits: [
-    { id: id(), person_id: demoPerson.id, visit_date: new Date().toLocaleDateString('en-CA'), place: '咖啡店', family_note: '與家人的關係漸漸穩定。', work_note: '正在適應新工作。', spiritual_note: '願意重新開始讀經。', prayer_note: '', created_at: now() },
+    { id: id(), person_id: demoPerson.id, visit_date: new Date().toLocaleDateString('en-CA'), place: '咖啡店', family_note: '與家人的關係漸漸穩定。', work_note: '正在適應新工作。', spiritual_note: '願意重新開始讀經。', prayer_note: '', synced_prayer: '', created_at: now() },
   ],
   checks: [],
 }
@@ -124,7 +125,7 @@ export async function savePrayer(personId: string, request: string, existing?: P
   if (!clean) throw new Error('請輸入代禱內容')
   if (isDemo) {
     if (existing) demo.prayers = demo.prayers.map((item) => item.id === existing.id ? { ...item, person_id: personId, request: clean } : item)
-    else demo.prayers.unshift({ id: id(), person_id: personId, request: clean, status: 'active', is_pinned: false, answered_at: null, answered_note: '', source_visit_id: null, created_at: now() })
+    else demo.prayers.unshift({ id: id(), person_id: personId, request: clean, status: 'active', is_pinned: false, answered_at: null, answered_note: '', source_visit_id: null, source_visit_line: null, created_at: now() })
     return
   }
   const client = requireClient()
@@ -159,6 +160,23 @@ export async function setPrayerChecked(prayer: PrayerItem, prayedOn: string, che
   }
 }
 
+export async function markPrayersChecked(prayers: PrayerItem[], prayedOn: string) {
+  if (!prayers.length) return
+  if (isDemo) {
+    for (const prayer of prayers) {
+      if (!demo.checks.some((item) => item.prayer_id === prayer.id && item.prayed_on === prayedOn)) {
+        demo.checks.unshift({ id: id(), prayer_id: prayer.id, prayed_on: prayedOn, created_at: now() })
+      }
+    }
+    return
+  }
+  const owner_id = await userId()
+  const rows = prayers.map((prayer) => ({ owner_id, prayer_id: prayer.id, prayed_on: prayedOn }))
+  mustSucceed((await requireClient().from('prayer_checks').upsert(rows, {
+    onConflict: 'owner_id,prayer_id,prayed_on', ignoreDuplicates: true,
+  })).error)
+}
+
 export async function setPrayerPinned(prayer: PrayerItem, isPinned: boolean) {
   if (isDemo) {
     demo.prayers = demo.prayers.map((item) => item.id === prayer.id ? { ...item, is_pinned: isPinned } : item)
@@ -179,19 +197,27 @@ export async function deletePrayer(prayer: PrayerItem) {
 export async function saveVisit(draft: VisitDraft, existing?: CareVisit) {
   if (!draft.person_id || !draft.visit_date) throw new Error('請選擇代禱者和訪談日期')
   if (isDemo) {
-    const next = { ...draft, id: existing?.id ?? id(), created_at: existing?.created_at ?? now() }
+    const previous = demo.visits.find((item) => item.id === existing?.id)
+    const next = { ...draft, id: existing?.id ?? id(), synced_prayer: draft.prayer_note.trim(), created_at: existing?.created_at ?? now() }
     demo.visits = existing ? demo.visits.map((item) => item.id === existing.id ? next : item) : [next, ...demo.visits]
-    const linked = demo.prayers.find((item) => item.source_visit_id === next.id)
-    if (existing && draft.prayer_note.trim() === existing.prayer_note.trim() && draft.person_id === existing.person_id) return
-    if (draft.prayer_note.trim()) {
-      if (linked && linked.status !== 'answered' && linked.request === existing?.prayer_note.trim()) {
-        linked.request = draft.prayer_note.trim()
-        linked.person_id = next.person_id
+    if (previous && next.synced_prayer === previous.synced_prayer && next.person_id === previous.person_id) return
+    const oldLines = splitPrayerLines(previous?.synced_prayer ?? '')
+    const linked = demo.prayers.filter((item) => item.source_visit_id === next.id)
+    const candidates = linked.filter((item) => {
+      const line = item.source_visit_line ?? 1
+      return item.status !== 'answered' && (item.request === oldLines[line - 1] || (line === 1 && item.request === previous?.synced_prayer))
+    })
+    demo.prayers = demo.prayers.map((item) => item.source_visit_id === next.id ? { ...item, source_visit_id: null, source_visit_line: null } : item)
+    for (const [index, request] of splitPrayerLines(next.prayer_note).entries()) {
+      const line = index + 1
+      const matched = candidates.find((item) => item.request === request) ?? candidates.find((item) => item.source_visit_line === line)
+      if (matched) {
+        demo.prayers = demo.prayers.map((item) => item.id === matched.id ? { ...item, person_id: next.person_id, request, source_visit_id: next.id, source_visit_line: line } : item)
+        candidates.splice(candidates.indexOf(matched), 1)
       } else {
-        if (linked) linked.source_visit_id = null
-        demo.prayers.unshift({ id: id(), person_id: next.person_id, request: draft.prayer_note.trim(), status: 'active', is_pinned: false, answered_at: null, answered_note: '', source_visit_id: next.id, created_at: now() })
+        demo.prayers.unshift({ id: id(), person_id: next.person_id, request, status: 'active', is_pinned: false, answered_at: null, answered_note: '', source_visit_id: next.id, source_visit_line: line, created_at: now() })
       }
-    } else if (linked) linked.source_visit_id = null
+    }
     return
   }
   const client = requireClient()
@@ -205,7 +231,7 @@ export async function saveVisit(draft: VisitDraft, existing?: CareVisit) {
 export async function deleteVisit(visit: CareVisit) {
   if (isDemo) {
     demo.visits = demo.visits.filter((item) => item.id !== visit.id)
-    demo.prayers = demo.prayers.map((item) => item.source_visit_id === visit.id ? { ...item, source_visit_id: null } : item)
+    demo.prayers = demo.prayers.map((item) => item.source_visit_id === visit.id ? { ...item, source_visit_id: null, source_visit_line: null } : item)
     return
   }
   mustSucceed((await requireClient().from('care_visits').delete().eq('id', visit.id)).error)

@@ -22,6 +22,7 @@ export type PrayerItem = {
   answered_at: string | null
   answered_note: string
   source_visit_id: string | null
+  source_visit_line: number | null
   created_at: string
 }
 
@@ -41,6 +42,7 @@ export type CareVisit = {
   work_note: string
   spiritual_note: string
   prayer_note: string
+  synced_prayer: string
   created_at: string
 }
 

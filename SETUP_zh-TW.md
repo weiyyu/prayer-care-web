@@ -16,6 +16,8 @@
 2. 新專案先在 SQL Editor 檢視並執行 [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql)，再執行 [`supabase/migrations/002_prayer_checks.sql`](supabase/migrations/002_prayer_checks.sql)。001 只適用空白專案；已有資料的專案只需執行尚未套用的 002，不可重跑 001。002 新增逐日禱告紀錄與本人可讀寫的 RLS，將舊「已代禱」標記補成一筆歷史紀錄，不刪除原有資料。**先完成並驗證 002，再部署使用新版每日紀錄的前端。**
 
 目前連接的測試專案已於 2026/11/25 套用 002。SQL Editor 查核：新表 RLS 已開啟、匿名不可讀、登入角色有 SELECT／INSERT／DELETE，且存在本人限定政策；套用前舊「已代禱」標記為 0 筆。這不等同於完成雙帳號或登入後逐日紀錄實測。
+
+新版「關懷訪談每行一項代禱」需要依序執行 [`supabase/migrations/003_visit_prayer_lines.sql`](supabase/migrations/003_visit_prayer_lines.sql)。003 將舊的單項唯一限制改為逐行唯一限制，包含已儲存的多行訪談；原本第一項的每日紀錄保留。此交易只可執行一次。**目前連接的測試專案已於 2026/11/25 套用 003；其他環境仍須先套用再部署新版前端。** 套用前有 2 篇訪談、4 項代禱；套用後有 7 項，逐行數與連動項目不符的訪談為 0。舊唯一限制已移除、新逐行索引存在，RLS 仍開啟、匿名無 SELECT 權限。訪談代禱欄每個非空白行會同步成獨立事項；日後從訪談刪去某行時，舊事項會解除連動但保留，避免抹去禱告歷史。代禱卡依人物合併顯示；「列印 / PDF」使用瀏覽器列印視窗，可選印表機或另存 PDF，列印的是目前篩選結果。
 3. 在 Authentication > Sign In / Providers 啟用 Email，保留 Confirm Email；設定 Site URL 與 Redirect URLs，至少包含本機 `http://127.0.0.1:5179/`，正式上線時再加正式 HTTPS 網址。網頁採電子郵件與密碼註冊／登入，首次驗證及忘記密碼才寄信。
 4. 複製 `.env.example` 為 `.env.local`，填入 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_PUBLISHABLE_KEY`。重啟 `npm run dev -- --port 5179 --strictPort`。
 5. 先用 Supabase 專案團隊成員的信箱註冊帳密，並在同一台執行本機伺服器的電腦開啟首次驗證信。Supabase 內建寄信服務只寄給團隊成員且有限流；第二個測試帳號需先配置自訂 SMTP，或在可丟棄的本機 Supabase 測試環境完成。之後分別建立虛構代禱者、代禱事項、訪談與照片；A 登出後改登入 B，確認 B 只能看到 B 的資料，反向也要測。
