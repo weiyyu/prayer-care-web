@@ -190,7 +190,7 @@ function PrintSheet({ groups, label, date }: { groups: PrayerGroup[]; label: str
   return <div className="print-sheet"><header><h1>禱告祭壇</h1><p>{label} · {shortDate(date)}</p></header>{groups.map((group) => <section className="print-person" key={group.personId}><div className="print-person-head"><h2>{group.person?.name || '已移除的代禱者'}</h2><span>{group.person?.category || '未分類'}</span></div><ol>{group.prayers.map((prayer) => <li key={prayer.id}><span className="print-check" /> <span>{prayer.request}</span></li>)}</ol></section>)}<footer>禱告祭壇 · 私人代禱清單</footer></div>
 }
 
-type AuthMode = 'signin' | 'signup' | 'forgot' | 'reset'
+type AuthMode = 'signin' | 'signup' | 'resend' | 'forgot' | 'reset'
 
 function AuthGate({ recovering = false, onRecovered, onCancelRecovery }: { recovering?: boolean; onRecovered: () => void; onCancelRecovery: () => void }) {
   const [selectedMode, setSelectedMode] = useState<Exclude<AuthMode, 'reset'>>('signin')
@@ -224,6 +224,12 @@ function AuthGate({ recovering = false, onRecovered, onCancelRecovery }: { recov
         setFeedback({ text: '若此信箱已註冊，重設密碼連結會寄到你的信箱。', error: false })
         return
       }
+      if (mode === 'resend') {
+        const { error } = await supabase!.auth.resend({ type: 'signup', email: email.trim(), options: { emailRedirectTo: redirectTo } })
+        if (error) throw error
+        setFeedback({ text: '如果這個信箱尚待驗證，驗證信會寄到你的信箱。請也檢查垃圾郵件。', error: false })
+        return
+      }
       if (mode === 'reset') {
         const { error } = await supabase!.auth.updateUser({ password })
         if (error) throw error
@@ -235,14 +241,14 @@ function AuthGate({ recovering = false, onRecovered, onCancelRecovery }: { recov
         if (error) throw error
         setPassword('')
         setConfirmation('')
-        setFeedback({ text: '註冊已送出。請至信箱完成驗證，再用帳密登入。', error: false })
+      setFeedback({ text: '如果這個信箱可以註冊，驗證信會寄到信箱。完成驗證後再登入。', error: false })
         return
       }
       const { error } = await supabase!.auth.signInWithPassword({ email: email.trim(), password })
       if (error) throw error
     } catch (error) {
       const message = error instanceof Error ? error.message : '操作失敗，請稍後再試'
-      const readable = /email address not authorized/i.test(message) ? '目前測試寄信只支援 Supabase 專案團隊的信箱。公開註冊前需設定寄信服務。'
+      const readable = /email address not authorized/i.test(message) ? '目前僅能寄信給測試帳號；公開註冊的寄信服務尚未設定。'
         : /invalid login credentials/i.test(message) ? '帳號或密碼錯誤，或信箱尚未驗證。'
         : /email not confirmed/i.test(message) ? '請先到信箱完成驗證，再登入。'
         : /rate limit/i.test(message) ? '操作太頻繁，請稍後再試。'
@@ -253,16 +259,17 @@ function AuthGate({ recovering = false, onRecovered, onCancelRecovery }: { recov
   }
   return <main className="auth-screen"><div className="auth-panel"><img src={`${import.meta.env.BASE_URL}brand-icon.png`} alt="禱告祭壇" className="auth-logo" /><div className="eyebrow">禱告祭壇 · PRAYER ALTAR</div><h1>{mode === 'reset' ? '設定新密碼' : '把關懷，帶進禱告裡。'}</h1><p>{mode === 'reset' ? '請為你的帳號設定新密碼。' : '登入後，只會看到自己建檔的代禱者、代禱事項與訪談紀錄。'}</p>
     {(mode === 'signin' || mode === 'signup') && <div className="auth-tabs" role="tablist" aria-label="帳號操作"><button type="button" role="tab" aria-selected={mode === 'signin'} onClick={() => changeMode('signin')}>登入</button><button type="button" role="tab" aria-selected={mode === 'signup'} onClick={() => changeMode('signup')}>註冊</button></div>}
-    {mode === 'forgot' && <h2 className="auth-subtitle">忘記密碼</h2>}
+    {(mode === 'forgot' || mode === 'resend') && <h2 className="auth-subtitle">{mode === 'forgot' ? '忘記密碼' : '重寄驗證信'}</h2>}
     <form onSubmit={submit}>
       {mode !== 'reset' && <label className="field"><span>電子郵件</span><input required type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" /></label>}
-      {mode !== 'forgot' && <label className="field"><span>{mode === 'reset' ? '新密碼' : '密碼'}</span><span className="password-field"><input required type={showPassword ? 'text' : 'password'} minLength={mode === 'signin' ? undefined : 8} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'signin' ? '輸入密碼' : '至少 8 個字元'} /><button type="button" className="password-toggle" aria-label={showPassword ? '隱藏密碼' : '顯示密碼'} title={showPassword ? '隱藏密碼' : '顯示密碼'} onClick={() => setShowPassword((old) => !old)}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></span></label>}
+      {mode !== 'forgot' && mode !== 'resend' && <label className="field"><span>{mode === 'reset' ? '新密碼' : '密碼'}</span><span className="password-field"><input required type={showPassword ? 'text' : 'password'} minLength={mode === 'signin' ? undefined : 8} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} value={password} onChange={(event) => setPassword(event.target.value)} placeholder={mode === 'signin' ? '輸入密碼' : '至少 8 個字元'} /><button type="button" className="password-toggle" aria-label={showPassword ? '隱藏密碼' : '顯示密碼'} title={showPassword ? '隱藏密碼' : '顯示密碼'} onClick={() => setShowPassword((old) => !old)}>{showPassword ? <EyeOff size={18} /> : <Eye size={18} />}</button></span></label>}
       {(mode === 'signup' || mode === 'reset') && <label className="field"><span>確認密碼</span><input required type={showPassword ? 'text' : 'password'} minLength={8} autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} placeholder="再次輸入密碼" /></label>}
       {mode === 'signin' && <button type="button" className="auth-link auth-forgot" onClick={() => changeMode('forgot')}>忘記密碼？</button>}
-      <button className="button-primary auth-submit" disabled={busy}>{busy ? '處理中...' : mode === 'signin' ? '登入' : mode === 'signup' ? '建立帳號' : mode === 'forgot' ? '寄送重設連結' : '儲存新密碼'}</button>
+      <button className="button-primary auth-submit" disabled={busy}>{busy ? '處理中...' : mode === 'signin' ? '登入' : mode === 'signup' ? '建立帳號' : mode === 'resend' ? '重寄驗證信' : mode === 'forgot' ? '寄送重設連結' : '儲存新密碼'}</button>
     </form>
     {feedback && <p className={`auth-message ${feedback.error ? 'auth-error' : ''}`} role={feedback.error ? 'alert' : 'status'}>{feedback.text}</p>}
-    {mode === 'forgot' && <button type="button" className="auth-link auth-back" onClick={() => changeMode('signin')}>返回登入</button>}
+    {(mode === 'signin' || mode === 'signup') && <button type="button" className="auth-link auth-back" onClick={() => changeMode('resend')}>沒收到驗證信？</button>}
+    {(mode === 'forgot' || mode === 'resend') && <button type="button" className="auth-link auth-back" onClick={() => changeMode('signin')}>返回登入</button>}
     {mode === 'reset' && <button type="button" className="auth-link auth-back" onClick={onCancelRecovery}>取消並返回登入</button>}
   </div></main>
 }

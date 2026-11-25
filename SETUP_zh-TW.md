@@ -9,7 +9,7 @@
 1. 選擇可靠的交易郵件服務，準備經服務商驗證的寄件地址。正式對外使用建議使用自有網域寄件地址，並依服務商要求設定 SPF／DKIM 等 DNS 紀錄。沒有自有網域時，先確認服務商是否允許使用其已驗證的寄件地址；不要假設任意 Gmail 地址可直接作正式寄件地址。
 2. 在 Supabase Dashboard → Authentication → SMTP Settings 啟用自訂 SMTP，填入服務商提供的 Host、Port、Username、Password、Sender email；Sender name 可設「禱告祭壇」。SMTP 密碼只放在 Supabase 後台，不要放進原始碼、公開儲存庫或傳給協作者。
 3. 在 Authentication → URL Configuration 確認 Site URL 為 `https://weiyyu.github.io/prayer-care-web/`，Redirect URLs 保留此網址及本機測試網址。檢查驗證信與重設密碼信的模板連結確實返回正式站。
-4. 檢查 Authentication → Rate Limits 的寄信限制，依服務商額度與測試量設定。先用**非 Supabase 專案團隊**的測試信箱驗證：註冊、收到驗證信、完成驗證、登入、忘記密碼、重設後登入。記錄寄送失敗／退信，確認後才邀請其他使用者。
+4. 檢查 Authentication → Rate Limits 的寄信限制，依服務商額度與測試量設定。先用**非 Supabase 專案團隊**的測試信箱驗證：註冊、收到驗證信、完成驗證、登入、忘記密碼、重設後登入。若沒收到驗證信，從登入／註冊畫面的「沒收到驗證信？」重寄，並檢查垃圾郵件。記錄寄送失敗／退信，確認後才邀請其他使用者。
 
 尚未選定寄信服務、提供寄件網域或在 Supabase 設定 SMTP 前，不能宣稱公開註冊已可用。前端現在會在預設寄信服務拒絕地址時提示使用者，而不會假裝寄信成功。
 
