@@ -2,6 +2,19 @@
 
 ## GitHub Pages 測試版
 
+## 開放註冊前：寄信設定
+
+目前網頁已有 Email／密碼註冊、驗證信與忘記密碼流程，但 Supabase 預設寄信服務只適合專案團隊測試。若要讓非測試者註冊，必須先設定自訂 SMTP；這是 Supabase Auth 的後台設定，**不是**把寄信帳密加入 GitHub Pages 或 `VITE_` 環境變數。
+
+1. 選擇可靠的交易郵件服務，準備經服務商驗證的寄件地址。正式對外使用建議使用自有網域寄件地址，並依服務商要求設定 SPF／DKIM 等 DNS 紀錄。沒有自有網域時，先確認服務商是否允許使用其已驗證的寄件地址；不要假設任意 Gmail 地址可直接作正式寄件地址。
+2. 在 Supabase Dashboard → Authentication → SMTP Settings 啟用自訂 SMTP，填入服務商提供的 Host、Port、Username、Password、Sender email；Sender name 可設「禱告祭壇」。SMTP 密碼只放在 Supabase 後台，不要放進原始碼、公開儲存庫或傳給協作者。
+3. 在 Authentication → URL Configuration 確認 Site URL 為 `https://weiyyu.github.io/prayer-care-web/`，Redirect URLs 保留此網址及本機測試網址。檢查驗證信與重設密碼信的模板連結確實返回正式站。
+4. 檢查 Authentication → Rate Limits 的寄信限制，依服務商額度與測試量設定。先用**非 Supabase 專案團隊**的測試信箱驗證：註冊、收到驗證信、完成驗證、登入、忘記密碼、重設後登入。記錄寄送失敗／退信，確認後才邀請其他使用者。
+
+尚未選定寄信服務、提供寄件網域或在 Supabase 設定 SMTP 前，不能宣稱公開註冊已可用。前端現在會在預設寄信服務拒絕地址時提示使用者，而不會假裝寄信成功。
+
+資料清單現在每頁顯示 20 筆；載入時以每批 500 筆讀取，避免資料超過 API 單次上限而被悄悄截斷。照片的小縮圖會在進入畫面前自動讀取私人 Storage，**不需要按載入**；仍會保留登入帳號隔離。這是畫面分頁，不是伺服器端搜尋分頁：單一帳號資料量很大時仍會載入其全部文字紀錄，之後可改為資料庫端搜尋與分頁。
+
 測試站網址：`https://weiyyu.github.io/prayer-care-web/`。GitHub Pages 網址公開可開啟；資料仍需 Supabase 帳號登入。不要把站點公開可見誤當成資料已完成跨帳號隔離驗收。
 
 部署使用 `.github/workflows/deploy.yml`，在 GitHub Repository Variables 設定 `VITE_SUPABASE_URL` 與 `VITE_SUPABASE_PUBLISHABLE_KEY`。這兩項是前端可公開的連線設定；`service_role`、secret key、帳號密碼與 `.env.local` 絕不可上傳。正式網址須加入 Supabase Authentication 的 Site URL／Redirect URLs，否則驗證信與重設密碼可能回到本機網址。

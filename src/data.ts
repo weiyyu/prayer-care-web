@@ -7,6 +7,54 @@ const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
 export const isDemo = !url || !key
 export const supabase = isDemo ? null : createClient(url, key)
 
+const photoCache = new Map<string, { url?: string; pending?: Promise<string | null> }>()
+const photoInvalidations = new Map<string, number>()
+let photoOwner: string | null = null
+let photoGeneration = 0
+
+export function setPhotoOwner(owner: string | null) {
+  if (owner === photoOwner) return
+  photoOwner = owner
+  photoGeneration++
+  for (const entry of photoCache.values()) if (entry.url) URL.revokeObjectURL(entry.url)
+  photoCache.clear()
+  photoInvalidations.clear()
+}
+
+export function cachedPhotoUrl(path: string | null): string | null {
+  return path ? photoCache.get(path)?.url ?? null : null
+}
+
+export async function loadPersonPhoto(path: string): Promise<string | null> {
+  const cached = photoCache.get(path)
+  if (cached?.url) return cached.url
+  if (cached?.pending) return cached.pending
+  const generation = photoGeneration
+  const invalidation = photoInvalidations.get(path) ?? 0
+  const pending = (async () => {
+    try {
+      const { data, error } = await requireClient().storage.from('person-photos').download(path)
+      if (error || !data) throw error ?? new Error('照片下載失敗')
+      const objectUrl = URL.createObjectURL(data)
+      if (generation !== photoGeneration || invalidation !== (photoInvalidations.get(path) ?? 0)) { URL.revokeObjectURL(objectUrl); return null }
+      photoCache.set(path, { url: objectUrl })
+      return objectUrl
+    } catch {
+      if (generation === photoGeneration && invalidation === (photoInvalidations.get(path) ?? 0)) photoCache.delete(path)
+      return null
+    }
+  })()
+  photoCache.set(path, { pending })
+  return pending
+}
+
+function invalidatePhoto(path: string) {
+  photoInvalidations.set(path, (photoInvalidations.get(path) ?? 0) + 1)
+  const cached = photoCache.get(path)
+  if (cached?.url) URL.revokeObjectURL(cached.url)
+  photoCache.delete(path)
+}
+
 const now = () => new Date().toISOString()
 const id = () => crypto.randomUUID()
 const demoPerson: CarePerson = {
@@ -43,28 +91,29 @@ function mustSucceed(error: { message: string } | null) {
 export async function loadSnapshot(): Promise<Snapshot> {
   if (isDemo) return structuredClone(demo)
   const client = requireClient()
-  const [peopleResult, prayerResult, visitResult] = await Promise.all([
-    client.from('care_people').select('*').order('name'),
-    client.from('prayer_items').select('*').order('created_at', { ascending: false }),
-    client.from('care_visits').select('*').order('visit_date', { ascending: false }),
+  const fetchAll = async (table: 'care_people' | 'prayer_items' | 'care_visits', order: string, ascending: boolean) => {
+    const rows: Record<string, unknown>[] = []
+    for (let offset = 0; ; offset += 500) {
+      const result = await client.from(table).select('*').order(order, { ascending }).order('id').range(offset, offset + 499)
+      mustSucceed(result.error)
+      rows.push(...(result.data ?? []))
+      if ((result.data?.length ?? 0) < 500) break
+    }
+    return rows
+  }
+  const [people, prayers, visits] = await Promise.all([
+    fetchAll('care_people', 'name', true),
+    fetchAll('prayer_items', 'created_at', false),
+    fetchAll('care_visits', 'visit_date', false),
   ])
-  mustSucceed(peopleResult.error)
-  mustSucceed(prayerResult.error)
-  mustSucceed(visitResult.error)
   const checks: PrayerCheck[] = []
-  for (let offset = 0; ; offset += 1000) {
-    const result = await client.from('prayer_checks').select('id,prayer_id,prayed_on,created_at').order('prayed_on', { ascending: false }).order('id').range(offset, offset + 999)
+  for (let offset = 0; ; offset += 500) {
+    const result = await client.from('prayer_checks').select('id,prayer_id,prayed_on,created_at').order('prayed_on', { ascending: false }).order('id').range(offset, offset + 499)
     mustSucceed(result.error)
     checks.push(...(result.data ?? []))
-    if ((result.data?.length ?? 0) < 1000) break
+    if ((result.data?.length ?? 0) < 500) break
   }
-  const people = (peopleResult.data ?? []) as CarePerson[]
-  await Promise.all(people.map(async (person) => {
-    if (!person.photo_path) return
-    const { data } = await client.storage.from('person-photos').download(person.photo_path)
-    person.photo_url = data ? URL.createObjectURL(data) : null
-  }))
-  return { people, prayers: (prayerResult.data ?? []) as PrayerItem[], visits: (visitResult.data ?? []) as CareVisit[], checks }
+  return { people: people as CarePerson[], prayers: prayers as PrayerItem[], visits: visits as CareVisit[], checks }
 }
 
 export async function savePerson(draft: PersonDraft, existing?: CarePerson, photo?: File | null, removePhoto = false) {
@@ -90,11 +139,13 @@ export async function savePerson(draft: PersonDraft, existing?: CarePerson, phot
   if (removePhoto && existing?.photo_path) {
     mustSucceed((await client.storage.from('person-photos').remove([existing.photo_path])).error)
     mustSucceed((await client.from('care_people').update({ photo_path: null, updated_at: now() }).eq('id', personId)).error)
+    invalidatePhoto(existing.photo_path)
   }
   if (photo) {
     const path = existing?.photo_path ?? `${owner_id}/${personId}/photo`
     const upload = await client.storage.from('person-photos').upload(path, photo, { contentType: photo.type, upsert: Boolean(existing?.photo_path) })
     mustSucceed(upload.error)
+    invalidatePhoto(path)
     if (!existing?.photo_path) {
       const update = await client.from('care_people').update({ photo_path: path, updated_at: now() }).eq('id', personId)
       if (update.error) {
@@ -115,7 +166,10 @@ export async function deletePerson(person: CarePerson) {
     return
   }
   const client = requireClient()
-  if (person.photo_path) mustSucceed((await client.storage.from('person-photos').remove([person.photo_path])).error)
+  if (person.photo_path) {
+    mustSucceed((await client.storage.from('person-photos').remove([person.photo_path])).error)
+    invalidatePhoto(person.photo_path)
+  }
   const result = await client.from('care_people').delete().eq('id', person.id)
   mustSucceed(result.error)
 }

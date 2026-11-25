@@ -59,6 +59,8 @@ button:disabled{cursor:wait;opacity:.58}
 .visit-open{display:inline-flex;align-items:center;gap:4px;min-height:42px;padding:8px 11px;border:1px solid #cadbce;border-radius:6px;background:#f0f5ef;color:#2b5a42;font-size:13px;font-weight:700}
 .visit-open:hover{background:#e4eee4}
 .visit-preview{display:flex;flex-direction:column;gap:20px}
+.pager{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 8px;color:#667c6e;font-size:13px}.pager>div{display:flex;gap:8px}.pager button{min-height:42px;display:inline-flex;align-items:center;gap:3px}.pager button:disabled{opacity:.45;cursor:not-allowed}.people-list .pager{padding:8px 12px 12px;margin:0}.people-list .pager button{padding:8px}
+@media(max-width:650px){.pager{flex-wrap:wrap}.pager>div{width:100%;justify-content:space-between}.people-list .pager{padding:14px}}
 .visit-preview-meta{display:flex;align-items:center;gap:7px;color:#728578;font-size:13px;margin:0}
 .visit-preview section{border-top:1px solid #e6ece6;padding-top:15px}
 .visit-preview h3{font-size:13px;color:#3f6b52;margin:0 0 8px}

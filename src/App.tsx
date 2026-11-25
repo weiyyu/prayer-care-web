@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { BookHeart, CalendarDays, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, ClipboardList, Eye, EyeOff, HeartHandshake, LogOut, MapPin, Menu, MoreHorizontal, Pencil, Plus, Printer, Search, Trash2, UsersRound, X } from 'lucide-react'
 import type { Session } from '@supabase/supabase-js'
-import { deletePerson, deletePrayer, deleteVisit, isDemo, loadSnapshot, markPrayersChecked, savePerson, savePrayer, saveVisit, setPrayerChecked, setPrayerPinned, setPrayerStatus, supabase } from './data'
+import { cachedPhotoUrl, deletePerson, deletePrayer, deleteVisit, isDemo, loadPersonPhoto, loadSnapshot, markPrayersChecked, savePerson, savePrayer, saveVisit, setPhotoOwner, setPrayerChecked, setPrayerPinned, setPrayerStatus, supabase } from './data'
 import type { CarePerson, CareVisit, PersonDraft, PrayerItem, Snapshot, VisitDraft } from './types'
 import { splitPrayerLines } from './prayerLines'
 
@@ -12,6 +12,7 @@ const empty: Snapshot = { people: [], prayers: [], visits: [], checks: [] }
 const localDate = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 const shortDate = (value: string) => value ? new Date(`${value.slice(0, 10)}T12:00:00`).toLocaleDateString('zh-TW', { year: 'numeric', month: 'long', day: 'numeric' }) : ''
 const nameOf = (people: CarePerson[], id: string) => people.find((person) => person.id === id)?.name ?? '已移除的代禱者'
+const PAGE_SIZE = 20
 type PrayerGroup = { personId: string; person?: CarePerson; prayers: PrayerItem[] }
 
 function groupPrayers(prayers: PrayerItem[], people: CarePerson[]): PrayerGroup[] {
@@ -28,9 +29,33 @@ function groupPrayers(prayers: PrayerItem[], people: CarePerson[]): PrayerGroup[
 }
 
 function Avatar({ person, size = 'normal' }: { person?: CarePerson; size?: 'normal' | 'large' }) {
-  return <div className={`avatar ${size === 'large' ? 'avatar-large' : ''}`}>
-    {person?.photo_url ? <img src={person.photo_url} alt={`${person.name}的照片`} /> : <span>{person?.name?.slice(0, 1) || '人'}</span>}
+  const ref = useRef<HTMLDivElement>(null)
+  const [photo, setPhoto] = useState(person?.photo_url ?? cachedPhotoUrl(person?.photo_path ?? null))
+  useEffect(() => {
+    let active = true
+    const path = person?.photo_path
+    setPhoto(person?.photo_url ?? cachedPhotoUrl(path ?? null))
+    if (!path || person?.photo_url) return
+    const fetchPhoto = () => { void loadPersonPhoto(path).then((url) => { if (active) setPhoto(url) }) }
+    if (!ref.current || !('IntersectionObserver' in window)) fetchPhoto()
+    else {
+      const observer = new IntersectionObserver((entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) { observer.disconnect(); fetchPhoto() }
+      }, { rootMargin: '240px' })
+      observer.observe(ref.current)
+      return () => { active = false; observer.disconnect() }
+    }
+    return () => { active = false }
+  }, [person])
+  return <div ref={ref} className={`avatar ${size === 'large' ? 'avatar-large' : ''}`}>
+    {photo ? <img src={photo} alt={`${person?.name ?? '代禱者'}的照片`} /> : <span>{person?.name?.slice(0, 1) || '人'}</span>}
   </div>
+}
+
+function Pager({ page, total, onPage }: { page: number; total: number; onPage: (page: number) => void }) {
+  const pages = Math.ceil(total / PAGE_SIZE)
+  if (pages <= 1) return null
+  return <nav className="pager" aria-label="清單分頁"><span>共 {total} 筆 · 第 {page} / {pages} 頁</span><div><button className="button-quiet" disabled={page <= 1} onClick={() => onPage(page - 1)}><ChevronLeft size={17} /> 上一頁</button><button className="button-quiet" disabled={page >= pages} onClick={() => onPage(page + 1)}>下一頁 <ChevronRight size={17} /></button></div></nav>
 }
 
 function IconButton({ title, onClick, children, tone = '' }: { title: string; onClick: () => void; children: ReactNode; tone?: string }) {
@@ -258,6 +283,7 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [category, setCategory] = useState('all')
   const [cardIndex, setCardIndex] = useState(0)
+  const [listPage, setListPage] = useState(1)
   const [focusOpen, setFocusOpen] = useState(false)
   const [focusIndex, setFocusIndex] = useState(0)
   const [focusBusy, setFocusBusy] = useState(false)
@@ -298,6 +324,7 @@ export default function App() {
       if (event === 'SIGNED_OUT') setRecovering(false)
       const nextOwner = next?.user.id ?? null
       if (nextOwner !== activeOwner.current) {
+        setPhotoOwner(nextOwner)
         activeOwner.current = nextOwner
         loadVersion.current++
         setSnapshot((previous) => {
@@ -329,12 +356,19 @@ export default function App() {
   }).sort((a, b) => Number(b.is_pinned) - Number(a.is_pinned) || b.created_at.localeCompare(a.created_at)), snapshot.people), [snapshot, category, query])
   const filteredPeople = useMemo(() => snapshot.people.filter((person) => (category === 'all' || person.category === category) && `${person.name} ${person.category} ${person.residence} ${person.feeling}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [snapshot.people, category, query])
   const filteredVisits = useMemo(() => snapshot.visits.filter((visit) => (category === 'all' || snapshot.people.find((person) => person.id === visit.person_id)?.category === category) && `${nameOf(snapshot.people, visit.person_id)} ${visit.place} ${visit.family_note} ${visit.work_note} ${visit.spiritual_note} ${visit.prayer_note}`.toLocaleLowerCase().includes(query.toLocaleLowerCase())).sort((a, b) => b.visit_date.localeCompare(a.visit_date)), [snapshot, category, query])
+  const totalListItems = page === 'prayers' ? filteredPrayers.length : page === 'people' ? filteredPeople.length : filteredVisits.length
+  const effectivePage = Math.min(listPage, Math.max(1, Math.ceil(totalListItems / PAGE_SIZE)))
+  const pageStart = (effectivePage - 1) * PAGE_SIZE
+  const visiblePrayers = filteredPrayers.slice(pageStart, pageStart + PAGE_SIZE)
+  const visiblePeople = filteredPeople.slice(pageStart, pageStart + PAGE_SIZE)
+  const visibleVisits = filteredVisits.slice(pageStart, pageStart + PAGE_SIZE)
   const selectedPerson = snapshot.people.find((person) => person.id === selectedPersonId)
   const currentGroup = prayerGroups[Math.min(cardIndex, prayerGroups.length - 1)]
   const checkedToday = new Set(snapshot.checks.filter((item) => item.prayed_on === today).map((item) => item.prayer_id))
   const count = (value: 'active' | 'answered') => snapshot.prayers.filter((item) => value === 'active' ? item.status !== 'answered' : item.status === 'answered').length
   const nav = [{ page: 'prayers' as const, label: '代禱事項', icon: HeartHandshake }, { page: 'people' as const, label: '代禱者', icon: UsersRound }, { page: 'visits' as const, label: '關懷訪談', icon: ClipboardList }]
-  function go(next: Page) { setPage(next); setQuery(''); setCategory('all'); setSelectedPersonId(next === 'people' && !window.matchMedia('(max-width:650px)').matches ? snapshot.people[0]?.id ?? null : null); setMobileMenu(false) }
+  function go(next: Page) { setPage(next); setListPage(1); setQuery(''); setCategory('all'); setSelectedPersonId(next === 'people' && !window.matchMedia('(max-width:650px)').matches ? snapshot.people[0]?.id ?? null : null); setMobileMenu(false) }
+  function changeListPage(next: number) { setListPage(next); if (page === 'people') setSelectedPersonId(null); window.scrollTo({ top: 0, behavior: 'smooth' }) }
   function confirmDelete(label: string, action: () => Promise<void>) { if (window.confirm(`確定刪除「${label}」嗎？刪除後無法復原。`)) void operate(action) }
   function startPrayer() {
     const next = focusGroups.findIndex((group) => group.prayers.some((prayer) => !checkedToday.has(prayer.id)))
@@ -371,10 +405,10 @@ export default function App() {
         <div className="page-heading"><div><div className="eyebrow">PRAYER ALTAR</div><h1>{page === 'prayers' ? '代禱事項' : page === 'people' ? '代禱者' : '關懷訪談'}</h1><p>{page === 'prayers' ? '安靜記下需要，也記得回望蒙應允的恩典。' : page === 'people' ? '每個名字背後，都是一段值得細心陪伴的生命。' : '把每一次談話，整理成下一次關懷的起點。'}</p></div><button className="button-primary add-button" aria-label={page === 'prayers' ? '新增代禱' : page === 'people' ? '新增代禱者' : '新增訪談'} onClick={() => setDialog(page === 'people' ? { kind: 'person' } : page === 'visits' ? { kind: 'visit' } : snapshot.people.length ? { kind: 'prayer' } : { kind: 'person' })}><Plus size={19} /><span>{page === 'prayers' ? '新增代禱' : page === 'people' ? '新增代禱者' : '新增訪談'}</span></button></div>
         {page === 'prayers' && <div className="prayer-entry"><div><span className="prayer-entry-icon"><HeartHandshake size={23} /></span><span><strong>安靜禱告</strong><small>{focusGroups.length} 位代禱者 · {focusGroups.reduce((sum, group) => sum + group.prayers.length, 0)} 項代禱</small></span></div><div className="prayer-entry-actions"><button className="button-primary" onClick={startPrayer}>開始禱告 <ChevronRight size={17} /></button><button className="button-quiet" onClick={printPrayers} title="列印或存成 PDF"><Printer size={17} /> <span>列印 / PDF</span></button></div></div>}
         {page === 'prayers' && <div className="summary-strip"><div><span className="summary-icon green"><HeartHandshake size={21} /></span><span><strong>{count('active')}</strong><small>持續代禱</small></span></div><div><span className="summary-icon plum"><Check size={21} /></span><span><strong>{snapshot.checks.filter((item) => item.prayed_on === today).length}</strong><small>今日已禱告</small></span></div><div><span className="summary-icon gold"><BookHeart size={21} /></span><span><strong>{count('answered')}</strong><small>蒙應允</small></span></div></div>}
-        <div className="toolbar"><div className="search-box"><Search size={19} /><input aria-label="搜尋" value={query} onChange={(event) => { setQuery(event.target.value); setCardIndex(0) }} placeholder={page === 'prayers' ? '搜尋姓名或代禱內容' : page === 'people' ? '搜尋姓名、分類或感動' : '搜尋訪談內容'} />{query && <IconButton title="清除搜尋" onClick={() => setQuery('')}><X size={17} /></IconButton>}</div><div className="select-wrap"><select aria-label="篩選分類" value={category} onChange={(event) => { setCategory(event.target.value); setCardIndex(0) }}><option value="all">所有分類</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select><ChevronDown size={16} /></div></div>
+        <div className="toolbar"><div className="search-box"><Search size={19} /><input aria-label="搜尋" value={query} onChange={(event) => { setQuery(event.target.value); setCardIndex(0); setListPage(1) }} placeholder={page === 'prayers' ? '搜尋姓名或代禱內容' : page === 'people' ? '搜尋姓名、分類或感動' : '搜尋訪談內容'} />{query && <IconButton title="清除搜尋" onClick={() => { setQuery(''); setListPage(1) }}><X size={17} /></IconButton>}</div><div className="select-wrap"><select aria-label="篩選分類" value={category} onChange={(event) => { setCategory(event.target.value); setCardIndex(0); setListPage(1) }}><option value="all">所有分類</option>{categories.map((item) => <option key={item} value={item}>{item}</option>)}</select><ChevronDown size={16} /></div></div>
         {loading ? <div className="loading-inline">正在整理資料...</div> : page === 'prayers' ? <>
-          <div className="section-tabs"><div role="tablist" aria-label="代禱狀態">{(['active', 'answered'] as const).map((value) => <button type="button" role="tab" aria-selected={status === value} className={status === value ? 'active' : ''} key={value} onClick={() => { setStatus(value); setCardIndex(0) }}>{value === 'active' ? '持續代禱' : '蒙應允'} <span>{count(value)}</span></button>)}</div><div className="mode-switch"><button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => setMode('list')}>清單</button><button type="button" className={mode === 'cards' ? 'active' : ''} onClick={() => setMode('cards')}>代禱卡</button></div></div>
-          {mode === 'list' ? filteredPrayers.length ? <div className="prayer-list">{filteredPrayers.map((prayer) => {
+          <div className="section-tabs"><div role="tablist" aria-label="代禱狀態">{(['active', 'answered'] as const).map((value) => <button type="button" role="tab" aria-selected={status === value} className={status === value ? 'active' : ''} key={value} onClick={() => { setStatus(value); setCardIndex(0); setListPage(1) }}>{value === 'active' ? '持續代禱' : '蒙應允'} <span>{count(value)}</span></button>)}</div><div className="mode-switch"><button type="button" className={mode === 'list' ? 'active' : ''} onClick={() => { setMode('list'); setListPage(1) }}>清單</button><button type="button" className={mode === 'cards' ? 'active' : ''} onClick={() => setMode('cards')}>代禱卡</button></div></div>
+          {mode === 'list' ? filteredPrayers.length ? <><div className="prayer-list">{visiblePrayers.map((prayer) => {
             const person = snapshot.people.find((item) => item.id === prayer.person_id)
             const history = snapshot.checks.filter((item) => item.prayer_id === prayer.id)
             const doneToday = checkedToday.has(prayer.id)
@@ -388,7 +422,7 @@ export default function App() {
               </div>
               <details className="row-menu"><summary aria-label={`更多操作：${person?.name || '代禱事項'}`} title="更多操作"><MoreHorizontal size={20} /></summary><div className="row-menu-panel">{prayer.status !== 'answered' ? <button onClick={() => setDialog({ kind: 'answer', item: prayer })}>記錄蒙應允</button> : <button onClick={() => void operate(() => setPrayerStatus(prayer, 'active'), '已恢復持續代禱')}>恢復持續代禱</button>}<button onClick={() => setDialog({ kind: 'prayer', item: prayer })}>編輯事項</button><button onClick={() => void operate(() => setPrayerPinned(prayer, !prayer.is_pinned), prayer.is_pinned ? '已取消置頂' : '已置頂')}>{prayer.is_pinned ? '取消置頂' : '置頂'}</button><button className="danger-text" onClick={() => confirmDelete('代禱事項', () => deletePrayer(prayer))}>刪除事項</button></div></details>
             </article>
-          })}</div> : <EmptyState text={query ? '找不到相符的代禱事項' : `目前沒有${status === 'active' ? '持續代禱' : '蒙應允'}的事項`} action="新增代禱" onClick={() => setDialog(snapshot.people.length ? { kind: 'prayer' } : { kind: 'person' })} />
+          })}</div><Pager page={effectivePage} total={filteredPrayers.length} onPage={changeListPage} /></> : <EmptyState text={query ? '找不到相符的代禱事項' : `目前沒有${status === 'active' ? '持續代禱' : '蒙應允'}的事項`} action="新增代禱" onClick={() => setDialog(snapshot.people.length ? { kind: 'prayer' } : { kind: 'person' })} />
             : prayerGroups.length && currentGroup ? <div className="card-area">
               <PrayerGroupCard group={currentGroup} index={Math.min(cardIndex, prayerGroups.length - 1)} total={prayerGroups.length} checkedToday={checkedToday} onProfile={() => { go('people'); setSelectedPersonId(currentGroup.personId) }} onAdd={() => setDialog({ kind: 'prayer', personId: currentGroup.personId })} onEdit={(prayer) => setDialog({ kind: 'prayer', item: prayer })} onAnswer={(prayer) => setDialog({ kind: 'answer', item: prayer })} onRestore={(prayer) => void operate(() => setPrayerStatus(prayer, 'active'), '已恢復持續代禱')} />
               <div className="card-controls"><button className="button-quiet" onClick={() => setCardIndex((index) => (index - 1 + prayerGroups.length) % prayerGroups.length)}><ChevronLeft size={18} /> 上一位</button>
@@ -397,7 +431,7 @@ export default function App() {
             </div> : <EmptyState text={`目前沒有${status === 'active' ? '持續代禱' : '蒙應允'}的事項`} action="新增代禱" onClick={() => setDialog(snapshot.people.length ? { kind: 'prayer' } : { kind: 'person' })} />}
         </> : page === 'people' ? <>
           <div className="list-meta">共 {filteredPeople.length} 位代禱者</div>
-          <div className={`people-layout ${selectedPerson ? 'has-selection' : ''}`}><div className="people-list">{filteredPeople.length ? filteredPeople.map((person) => <button type="button" className={`person-row ${selectedPersonId === person.id ? 'selected' : ''}`} key={person.id} onClick={() => setSelectedPersonId(person.id)}><Avatar person={person} /><span><strong>{person.name}</strong><small>{person.category || '未分類'} · {snapshot.prayers.filter((prayer) => prayer.person_id === person.id && prayer.status !== 'answered').length} 項持續代禱</small></span><ChevronRight size={17} /></button>) : <EmptyState text="還沒有代禱者" action="新增代禱者" onClick={() => setDialog({ kind: 'person' })} />}</div>
+          <div className={`people-layout ${selectedPerson ? 'has-selection' : ''}`}><div className="people-list">{filteredPeople.length ? visiblePeople.map((person) => <button type="button" className={`person-row ${selectedPersonId === person.id ? 'selected' : ''}`} key={person.id} onClick={() => setSelectedPersonId(person.id)}><Avatar person={person} /><span><strong>{person.name}</strong><small>{person.category || '未分類'} · {snapshot.prayers.filter((prayer) => prayer.person_id === person.id && prayer.status !== 'answered').length} 項持續代禱</small></span><ChevronRight size={17} /></button>) : <EmptyState text="還沒有代禱者" action="新增代禱者" onClick={() => setDialog({ kind: 'person' })} />}<Pager page={effectivePage} total={filteredPeople.length} onPage={changeListPage} /></div>
             <div className="person-detail">{selectedPerson ? <>
               <button className="person-back" onClick={() => setSelectedPersonId(null)}><ChevronLeft size={18} /> 代禱者清單</button>
               <div className="detail-head"><Avatar person={selectedPerson} size="large" /><div><span className="eyebrow">關懷檔案</span><h2>{selectedPerson.name}</h2><span className="category-label">{selectedPerson.category || '未分類'}</span>{!selectedPerson.is_profiled && <span className="source-label">簡易姓名</span>}</div><div className="detail-menu"><IconButton title="編輯檔案" onClick={() => setDialog({ kind: 'person', item: selectedPerson })}><Pencil size={18} /></IconButton><IconButton title="刪除代禱者" onClick={() => confirmDelete(`${selectedPerson.name}及所有相關資料`, () => deletePerson(selectedPerson))} tone="danger-text"><Trash2 size={18} /></IconButton></div></div>
@@ -406,10 +440,10 @@ export default function App() {
               <section className="detail-section"><div className="section-title"><h3>代禱事項</h3><button className="mini-add" onClick={() => setDialog({ kind: 'prayer', personId: selectedPerson.id })}><Plus size={16} /> 新增</button></div>{snapshot.prayers.filter((prayer) => prayer.person_id === selectedPerson.id).map((prayer) => <div className="detail-item" key={prayer.id}><span className={`status-dot ${prayer.status}`} /><span>{prayer.request}</span><small>{prayer.status === 'answered' ? '蒙應允' : checkedToday.has(prayer.id) ? '今天已禱告' : '持續代禱'}</small></div>)}{!snapshot.prayers.some((prayer) => prayer.person_id === selectedPerson.id) && <p className="muted">還沒有代禱事項</p>}</section>
               {selectedPerson.is_profiled && <section className="detail-section"><div className="section-title"><h3>關懷訪談</h3><button className="mini-add" onClick={() => setDialog({ kind: 'visit', personId: selectedPerson.id })}><Plus size={16} /> 新增</button></div>{snapshot.visits.filter((visit) => visit.person_id === selectedPerson.id).sort((a, b) => b.visit_date.localeCompare(a.visit_date)).slice(0, 3).map((visit) => <button className="visit-link" key={visit.id} onClick={() => setDialog({ kind: 'visitPreview', item: visit })}><CalendarDays size={16} /> {shortDate(visit.visit_date)} {visit.place && `· ${visit.place}`} <ChevronRight size={16} /></button>)}{!snapshot.visits.some((visit) => visit.person_id === selectedPerson.id) && <p className="muted">尚未記錄訪談</p>}</section>}
             </> : <div className="detail-placeholder"><UsersRound size={34} /><h3>選一位代禱者</h3><p>在這裡查看關懷檔案、代禱事項和訪談紀錄。</p></div>}</div></div>
-        </> : <><div className="list-meta">共 {filteredVisits.length} 次訪談</div>{filteredVisits.length ? <div className="visit-list">{filteredVisits.map((visit) => <article className="visit-row" key={visit.id}>
+        </> : <><div className="list-meta">共 {filteredVisits.length} 次訪談</div>{filteredVisits.length ? <><div className="visit-list">{visibleVisits.map((visit) => <article className="visit-row" key={visit.id}>
           <div className="visit-date"><CalendarDays size={18} /><span>{shortDate(visit.visit_date)}</span></div>
           <div className="visit-body"><h2>{nameOf(snapshot.people, visit.person_id)}</h2>{visit.place && <p className="visit-place"><MapPin size={15} />{visit.place}</p>}<p className="visit-excerpt">{visit.family_note || visit.work_note || visit.spiritual_note || visit.prayer_note || '這次訪談尚未填寫內容'}</p><div className="visit-actions"><button className="visit-open" onClick={() => setDialog({ kind: 'visitPreview', item: visit })}>閱讀紀錄 <ChevronRight size={17} /></button><details className="row-menu"><summary aria-label="更多訪談操作" title="更多操作"><MoreHorizontal size={20} /></summary><div className="row-menu-panel"><button onClick={() => setDialog({ kind: 'visit', item: visit })}>編輯訪談</button><button className="danger-text" onClick={() => confirmDelete('這次訪談', () => deleteVisit(visit))}>刪除訪談</button></div></details></div></div>
-        </article>)}</div> : <EmptyState text={query ? '找不到相符的訪談' : '還沒有訪談紀錄'} action="新增訪談" onClick={() => setDialog({ kind: 'visit' })} />}</>}
+        </article>)}</div><Pager page={effectivePage} total={filteredVisits.length} onPage={changeListPage} /></> : <EmptyState text={query ? '找不到相符的訪談' : '還沒有訪談紀錄'} action="新增訪談" onClick={() => setDialog({ kind: 'visit' })} />}</>}
       </main>
     </div>
     {dialog?.kind === 'person' && <PersonForm item={dialog.item} onClose={() => setDialog(null)} onSave={async (draft, file, removePhoto) => { await operate(() => savePerson(draft, dialog.item, file, removePhoto)) }} />}
