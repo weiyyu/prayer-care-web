@@ -25,6 +25,13 @@ export type PrayerItem = {
   created_at: string
 }
 
+export type PrayerCheck = {
+  id: string
+  prayer_id: string
+  prayed_on: string
+  created_at: string
+}
+
 export type CareVisit = {
   id: string
   person_id: string
@@ -41,6 +48,7 @@ export type Snapshot = {
   people: CarePerson[]
   prayers: PrayerItem[]
   visits: CareVisit[]
+  checks: PrayerCheck[]
 }
 
 export type PersonDraft = Pick<CarePerson, 'name' | 'category' | 'is_profiled' | 'birthday' | 'residence' | 'feeling'>

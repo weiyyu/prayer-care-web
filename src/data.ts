@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { CarePerson, CareVisit, PersonDraft, PrayerItem, PrayerStatus, Snapshot, VisitDraft } from './types'
+import type { CarePerson, CareVisit, PersonDraft, PrayerCheck, PrayerItem, PrayerStatus, Snapshot, VisitDraft } from './types'
 
 const url = import.meta.env.VITE_SUPABASE_URL?.trim()
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY?.trim()
@@ -21,6 +21,7 @@ let demo: Snapshot = {
   visits: [
     { id: id(), person_id: demoPerson.id, visit_date: new Date().toLocaleDateString('en-CA'), place: '咖啡店', family_note: '與家人的關係漸漸穩定。', work_note: '正在適應新工作。', spiritual_note: '願意重新開始讀經。', prayer_note: '', created_at: now() },
   ],
+  checks: [],
 }
 
 function requireClient() {
@@ -49,13 +50,20 @@ export async function loadSnapshot(): Promise<Snapshot> {
   mustSucceed(peopleResult.error)
   mustSucceed(prayerResult.error)
   mustSucceed(visitResult.error)
+  const checks: PrayerCheck[] = []
+  for (let offset = 0; ; offset += 1000) {
+    const result = await client.from('prayer_checks').select('id,prayer_id,prayed_on,created_at').order('prayed_on', { ascending: false }).order('id').range(offset, offset + 999)
+    mustSucceed(result.error)
+    checks.push(...(result.data ?? []))
+    if ((result.data?.length ?? 0) < 1000) break
+  }
   const people = (peopleResult.data ?? []) as CarePerson[]
   await Promise.all(people.map(async (person) => {
     if (!person.photo_path) return
     const { data } = await client.storage.from('person-photos').download(person.photo_path)
     person.photo_url = data ? URL.createObjectURL(data) : null
   }))
-  return { people, prayers: (prayerResult.data ?? []) as PrayerItem[], visits: (visitResult.data ?? []) as CareVisit[] }
+  return { people, prayers: (prayerResult.data ?? []) as PrayerItem[], visits: (visitResult.data ?? []) as CareVisit[], checks }
 }
 
 export async function savePerson(draft: PersonDraft, existing?: CarePerson, photo?: File | null, removePhoto = false) {
@@ -99,6 +107,8 @@ export async function savePerson(draft: PersonDraft, existing?: CarePerson, phot
 export async function deletePerson(person: CarePerson) {
   if (isDemo) {
     demo.people = demo.people.filter((item) => item.id !== person.id)
+    const removed = new Set(demo.prayers.filter((item) => item.person_id === person.id).map((item) => item.id))
+    demo.checks = demo.checks.filter((item) => !removed.has(item.prayer_id))
     demo.prayers = demo.prayers.filter((item) => item.person_id !== person.id)
     demo.visits = demo.visits.filter((item) => item.person_id !== person.id)
     return
@@ -132,6 +142,23 @@ export async function setPrayerStatus(prayer: PrayerItem, status: PrayerStatus, 
   mustSucceed((await requireClient().from('prayer_items').update({ status, answered_at: status === 'answered' ? now() : null, answered_note: status === 'answered' ? answeredNote : '', updated_at: now() }).eq('id', prayer.id)).error)
 }
 
+export async function setPrayerChecked(prayer: PrayerItem, prayedOn: string, checked: boolean) {
+  if (isDemo) {
+    if (checked) demo.checks = demo.checks.filter((item) => !(item.prayer_id === prayer.id && item.prayed_on === prayedOn))
+    else if (!demo.checks.some((item) => item.prayer_id === prayer.id && item.prayed_on === prayedOn)) {
+      demo.checks.unshift({ id: id(), prayer_id: prayer.id, prayed_on: prayedOn, created_at: now() })
+    }
+    return
+  }
+  const client = requireClient()
+  if (checked) {
+    mustSucceed((await client.from('prayer_checks').delete().eq('prayer_id', prayer.id).eq('prayed_on', prayedOn)).error)
+  } else {
+    const { error } = await client.from('prayer_checks').insert({ owner_id: await userId(), prayer_id: prayer.id, prayed_on: prayedOn })
+    if (error && error.code !== '23505') mustSucceed(error)
+  }
+}
+
 export async function setPrayerPinned(prayer: PrayerItem, isPinned: boolean) {
   if (isDemo) {
     demo.prayers = demo.prayers.map((item) => item.id === prayer.id ? { ...item, is_pinned: isPinned } : item)
@@ -143,6 +170,7 @@ export async function setPrayerPinned(prayer: PrayerItem, isPinned: boolean) {
 export async function deletePrayer(prayer: PrayerItem) {
   if (isDemo) {
     demo.prayers = demo.prayers.filter((item) => item.id !== prayer.id)
+    demo.checks = demo.checks.filter((item) => item.prayer_id !== prayer.id)
     return
   }
   mustSucceed((await requireClient().from('prayer_items').delete().eq('id', prayer.id)).error)

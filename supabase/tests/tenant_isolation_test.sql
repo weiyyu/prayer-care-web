@@ -2,7 +2,7 @@
 -- This transaction rolls back every fixture and write.
 begin;
 create extension if not exists pgtap with schema extensions;
-select plan(23);
+select plan(29);
 
 insert into auth.users (id, email) values
   ('11111111-1111-4111-8111-111111111111', 'prayer-test-a@example.invalid'),
@@ -17,17 +17,33 @@ insert into public.care_visits (id, owner_id, person_id, visit_date) values
 insert into public.prayer_items (id, owner_id, person_id, request) values
   ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', '11111111-1111-4111-8111-111111111111', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'A request'),
   ('ffffffff-ffff-4fff-8fff-ffffffffffff', '22222222-2222-4222-8222-222222222222', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'B request');
+insert into public.prayer_checks (owner_id, prayer_id, prayed_on) values
+  ('11111111-1111-4111-8111-111111111111', 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', current_date),
+  ('22222222-2222-4222-8222-222222222222', 'ffffffff-ffff-4fff-8fff-ffffffffffff', current_date);
 
 set local role anon;
 select throws_ok('select id from public.care_people limit 1', '42501', null, 'anon cannot read people');
 select throws_ok('select id from public.care_visits limit 1', '42501', null, 'anon cannot read visits');
 select throws_ok('select id from public.prayer_items limit 1', '42501', null, 'anon cannot read prayers');
+select throws_ok('select id from public.prayer_checks limit 1', '42501', null, 'anon cannot read prayer history');
 
 set local role authenticated;
 set local request.jwt.claim.sub = '11111111-1111-4111-8111-111111111111';
 select is_empty($$select id from public.care_people where id = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'$$, 'A cannot read B person');
 select is_empty($$select id from public.care_visits where id = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'$$, 'A cannot read B visit');
 select is_empty($$select id from public.prayer_items where id = 'ffffffff-ffff-4fff-8fff-ffffffffffff'$$, 'A cannot read B prayer');
+select is_empty($$select id from public.prayer_checks where prayer_id = 'ffffffff-ffff-4fff-8fff-ffffffffffff'$$, 'A cannot read B prayer history');
+select results_eq($$select count(*) from public.prayer_checks where prayer_id = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'$$,
+  array[1::bigint], 'A reads own prayer history');
+select throws_ok($$insert into public.prayer_checks (owner_id, prayer_id, prayed_on)
+  values ('22222222-2222-4222-8222-222222222222', 'ffffffff-ffff-4fff-8fff-ffffffffffff', current_date - 1)$$,
+  '42501', null, 'A cannot create B prayer history');
+select throws_ok($$insert into public.prayer_checks (prayer_id, prayed_on)
+  values ('ffffffff-ffff-4fff-8fff-ffffffffffff', current_date - 1)$$,
+  '23503', null, 'A cannot link history to B prayer');
+select throws_ok($$insert into public.prayer_checks (prayer_id, prayed_on)
+  values ('eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', current_date)$$,
+  '23505', null, 'one prayer has at most one check per day');
 
 select results_eq($$select id from public.care_people where id = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'$$,
   array['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'::uuid], 'A reads own person');

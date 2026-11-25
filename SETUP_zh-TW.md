@@ -13,7 +13,7 @@
 ## 先準備
 
 1. 在 Supabase 建立一個新專案，記下 Project URL 和 **publishable key**（舊介面可能稱 `anon` key）。不要把 `service_role` 或 secret key 放進網頁、`.env.local`、對話或公開儲存庫。
-2. 在 SQL Editor 檢視並執行 [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql)。執行前確認是空白測試專案；這是首次建表腳本，不是已有資料專案的升級腳本。
+2. 新專案先在 SQL Editor 檢視並執行 [`supabase/migrations/001_initial.sql`](supabase/migrations/001_initial.sql)，再執行 [`supabase/migrations/002_prayer_checks.sql`](supabase/migrations/002_prayer_checks.sql)。001 只適用空白專案；已有資料的專案只需執行尚未套用的 002，不可重跑 001。002 新增逐日禱告紀錄與本人可讀寫的 RLS，將舊「已代禱」標記補成一筆歷史紀錄，不刪除原有資料。**先完成並驗證 002，再部署使用新版每日紀錄的前端。**
 3. 在 Authentication > Sign In / Providers 啟用 Email，保留 Confirm Email；設定 Site URL 與 Redirect URLs，至少包含本機 `http://127.0.0.1:5179/`，正式上線時再加正式 HTTPS 網址。網頁採電子郵件與密碼註冊／登入，首次驗證及忘記密碼才寄信。
 4. 複製 `.env.example` 為 `.env.local`，填入 `VITE_SUPABASE_URL` 和 `VITE_SUPABASE_PUBLISHABLE_KEY`。重啟 `npm run dev -- --port 5179 --strictPort`。
 5. 先用 Supabase 專案團隊成員的信箱註冊帳密，並在同一台執行本機伺服器的電腦開啟首次驗證信。Supabase 內建寄信服務只寄給團隊成員且有限流；第二個測試帳號需先配置自訂 SMTP，或在可丟棄的本機 Supabase 測試環境完成。之後分別建立虛構代禱者、代禱事項、訪談與照片；A 登出後改登入 B，確認 B 只能看到 B 的資料，反向也要測。
